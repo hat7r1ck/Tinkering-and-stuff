@@ -1,0 +1,68 @@
+# Clear the console at the start
+Clear-Host
+
+# Define the markdown directory (customize this path)
+$markdownDirectory = "C:\Cases"
+
+# Ensure the directory exists
+if (-not (Test-Path -Path $markdownDirectory)) {
+    New-Item -ItemType Directory -Path $markdownDirectory | Out-Null
+    Write-Host "Created markdown directory: $markdownDirectory"
+}
+
+# Prompt for markdown file name
+$markdownFileName = Read-Host "Enter the markdown file name (e.g., Prod #1111111.md)"
+
+# Extract the case number using regex (digits after #, stopping at .md or period)
+if ($markdownFileName -match '#(\d+)\.md') {
+    $caseNumber = $matches[1]
+    Write-Host "Case number extracted: $caseNumber"
+} else {
+    $caseNumber = Read-Host "Could not extract case number. Enter it manually"
+}
+
+# Combine path and filename
+$existingMarkdownPath = Join-Path -Path $markdownDirectory -ChildPath $markdownFileName
+
+# Automatically create the markdown file if it doesn't exist
+if (-not (Test-Path -Path $existingMarkdownPath)) {
+    New-Item -ItemType File -Path $existingMarkdownPath | Out-Null
+    Write-Host "Created new markdown file: $existingMarkdownPath"
+} else {
+    Write-Host "Markdown file already exists: $existingMarkdownPath"
+}
+
+# Prompt for additional case details
+$detectionTime = Read-Host "Enter detection time"
+$username = Read-Host "Enter username"
+$detectionName = Read-Host "Enter detection name"
+$hostName = Read-Host "Enter hostname"
+$ruleDescription = Read-Host "Enter rule description"
+
+# Fetch AD user details (optional - adjust as needed)
+$adUserInfo = Get-ADUser -Filter {SamAccountName -eq $username} -Property * | Select-Object DisplayName, EmailAddress, Title
+
+# Create markdown content using a case template
+$markdownContent = @"
+# Case Number: $caseNumber
+
+- **Detection Time:** $detectionTime
+- **Username:** $username
+- **Detection Name:** $detectionName
+- **Hostname:** $hostName
+- **Rule Description:** $ruleDescription
+
+---
+
+### User Information
+- **Full Name:** $($adUserInfo.DisplayName)
+- **Email:** $($adUserInfo.EmailAddress)
+- **Title:** $($adUserInfo.Title)
+
+---
+"@
+
+# Append the content to the markdown file (without overwriting)
+$markdownContent | Add-Content -Path $existingMarkdownPath
+
+Write-Host "Case details appended to $existingMarkdownPath"
