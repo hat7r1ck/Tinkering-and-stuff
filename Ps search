@@ -1,0 +1,37 @@
+# Import the list of users from the file
+[array]$users = Get-Content -Path "path"
+
+# Initialize an array to store results
+$results = @()
+
+# Loop through each user and retrieve their group memberships
+foreach ($user in $users) {
+    try {
+        # Get the user's group memberships
+        $adUser = Get-ADUser -Identity $user -Properties MemberOf
+
+        # Filter groups
+        $filteredGroups = $adUser.MemberOf | ForEach-Object { 
+            (Get-ADGroup -Identity $_).Name 
+        } | Where-Object { $_ -like "*" }
+
+        # Add the user and their filtered entitlements to the results array
+        $results += [PSCustomObject]{
+            UserName     = $adUser.SamAccountName
+            Entitlements = ($filteredGroups -join ", ")
+        }
+    } catch {
+        Write-Warning "Unable to process user: $user"
+    }
+}
+
+# Define the output CSV file path
+$outputFile = "path"
+
+# Export results to CSV
+$results | Export-Csv -Path $outputFile -NoTypeInformation -Encoding UTF8
+
+# Output results to the console in a clean table format for immediate viewing
+$results | Format-Table -AutoSize
+
+Write-Host "Results exported to $outputFile" -ForegroundColor Green
