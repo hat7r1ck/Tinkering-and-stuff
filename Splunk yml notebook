@@ -5,7 +5,7 @@ import pandas as pd
 # Directories for YAML files
 stories_dir = "path/to/stories"  # Directory for Splunk stories
 detections_dir = "path/to/detections"  # Directory for Splunk detections
-filters_dir = "path/to/filters"  # Add filters directory if needed (optional)
+filters_dir = "path/to/filters"  # Optional: Directory for additional Splunk filters
 
 # Load MITRE Tactic Mapping from Excel (or CSV)
 # Ensure this file contains ATT&CK IDs and their corresponding Tactics
@@ -16,50 +16,59 @@ mitre_dict = pd.Series(mitre_mapping["Tactic"].values, index=mitre_mapping["ATT&
 data = []
 
 # Parse Story YAMLs
-for story_file in os.listdir(stories_dir):
-    if story_file.endswith(".yml") or story_file.endswith(".yaml"):
-        with open(os.path.join(stories_dir, story_file), "r") as f:
-            try:
-                # Load story YAML file
-                story_yaml = yaml.safe_load(f)
+for root, dirs, files in os.walk(stories_dir):  # Recursively search subfolders
+    if "deprecated" in root.lower():  # Skip deprecated folders
+        continue
 
-                # Extract basic fields from the story
-                name = story_yaml.get("name", "N/A")
-                data_sources = ", ".join(story_yaml.get("data_sources", []))
-                detections = story_yaml.get("detections", [])
-                date = story_yaml.get("creation_date", "N/A")
+    for story_file in files:
+        if story_file.endswith(".yml") or story_file.endswith(".yaml"):
+            with open(os.path.join(root, story_file), "r") as f:
+                try:
+                    # Load story YAML file
+                    story_yaml = yaml.safe_load(f)
 
-                # Initialize sets for tactics and products
-                tactics = set()
-                products = set()
+                    # Extract basic fields from the story
+                    name = story_yaml.get("name", "N/A")
+                    data_sources = ", ".join(story_yaml.get("data_sources", []))
+                    detections = story_yaml.get("detections", [])
+                    date = story_yaml.get("creation_date", "N/A")
 
-                # Process detections linked to the story
-                for detection_name in detections:
-                    detection_file = os.path.join(detections_dir, f"{detection_name}.yml")
-                    if os.path.exists(detection_file):
-                        with open(detection_file, "r") as df:
-                            detection_yaml = yaml.safe_load(df)
+                    # Initialize sets for tactics and products
+                    tactics = set()
+                    products = set()
 
-                            # Map MITRE IDs to Tactics
-                            mitre_ids = detection_yaml.get("mitre_attack_ids", [])
-                            for mitre_id in mitre_ids:
-                                if mitre_id in mitre_dict:
-                                    tactics.add(mitre_dict[mitre_id])
+                    # Process detections linked to the story
+                    for detection_name in detections:
+                        # Recursively search for detection files in subfolders
+                        for det_root, _, det_files in os.walk(detections_dir):
+                            if "deprecated" in det_root.lower():  # Skip deprecated folders
+                                continue
 
-                            # Collect associated products
-                            products.update(detection_yaml.get("products", []))
+                            detection_file = os.path.join(det_root, f"{detection_name}.yml")
+                            if os.path.exists(detection_file):
+                                with open(detection_file, "r") as df:
+                                    detection_yaml = yaml.safe_load(df)
 
-                # Append consolidated data to the list
-                data.append({
-                    "Name": name,
-                    "Data Sources": data_sources,
-                    "Tactics": ", ".join(tactics),
-                    "Products": ", ".join(products),
-                    "Date": date
-                })
+                                    # Map MITRE IDs to Tactics
+                                    mitre_ids = detection_yaml.get("mitre_attack_ids", [])
+                                    for mitre_id in mitre_ids:
+                                        if mitre_id in mitre_dict:
+                                            tactics.add(mitre_dict[mitre_id])
 
-            except yaml.YAMLError as e:
-                print(f"Error parsing {story_file}: {e}")
+                                    # Collect associated products
+                                    products.update(detection_yaml.get("products", []))
+
+                    # Append consolidated data to the list
+                    data.append({
+                        "Name": name,
+                        "Data Sources": data_sources,
+                        "Tactics": ", ".join(tactics),
+                        "Products": ", ".join(products),
+                        "Date": date
+                    })
+
+                except yaml.YAMLError as e:
+                    print(f"Error parsing {story_file}: {e}")
 
 # Convert data into a DataFrame
 df = pd.DataFrame(data)
