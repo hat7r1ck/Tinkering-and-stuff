@@ -1,0 +1,71 @@
+import os
+import yaml
+import pandas as pd
+
+# Directories for YAML files
+stories_dir = "path/to/stories"  # Directory for Splunk stories
+detections_dir = "path/to/detections"  # Directory for Splunk detections
+filters_dir = "path/to/filters"  # Add filters directory if needed (optional)
+
+# Load MITRE Tactic Mapping from Excel (or CSV)
+# Ensure this file contains ATT&CK IDs and their corresponding Tactics
+mitre_mapping = pd.read_excel("mitre_tactics.xlsx")  # Replace with your mapping file path
+mitre_dict = pd.Series(mitre_mapping["Tactic"].values, index=mitre_mapping["ATT&CK ID"]).to_dict()
+
+# Initialize list to store extracted data
+data = []
+
+# Parse Story YAMLs
+for story_file in os.listdir(stories_dir):
+    if story_file.endswith(".yml") or story_file.endswith(".yaml"):
+        with open(os.path.join(stories_dir, story_file), "r") as f:
+            try:
+                # Load story YAML file
+                story_yaml = yaml.safe_load(f)
+
+                # Extract basic fields from the story
+                name = story_yaml.get("name", "N/A")
+                data_sources = ", ".join(story_yaml.get("data_sources", []))
+                detections = story_yaml.get("detections", [])
+                date = story_yaml.get("creation_date", "N/A")
+
+                # Initialize sets for tactics and products
+                tactics = set()
+                products = set()
+
+                # Process detections linked to the story
+                for detection_name in detections:
+                    detection_file = os.path.join(detections_dir, f"{detection_name}.yml")
+                    if os.path.exists(detection_file):
+                        with open(detection_file, "r") as df:
+                            detection_yaml = yaml.safe_load(df)
+
+                            # Map MITRE IDs to Tactics
+                            mitre_ids = detection_yaml.get("mitre_attack_ids", [])
+                            for mitre_id in mitre_ids:
+                                if mitre_id in mitre_dict:
+                                    tactics.add(mitre_dict[mitre_id])
+
+                            # Collect associated products
+                            products.update(detection_yaml.get("products", []))
+
+                # Append consolidated data to the list
+                data.append({
+                    "Name": name,
+                    "Data Sources": data_sources,
+                    "Tactics": ", ".join(tactics),
+                    "Products": ", ".join(products),
+                    "Date": date
+                })
+
+            except yaml.YAMLError as e:
+                print(f"Error parsing {story_file}: {e}")
+
+# Convert data into a DataFrame
+df = pd.DataFrame(data)
+
+# Save the DataFrame to an Excel file
+output_file = "Splunk_Stories_Consolidated.xlsx"
+df.to_excel(output_file, index=False, engine="openpyxl")
+
+print(f"Data consolidated and saved to {output_file}")
