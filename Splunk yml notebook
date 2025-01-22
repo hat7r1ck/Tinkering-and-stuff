@@ -1,82 +1,100 @@
-import pandas as pd
+import os
 import yaml
+import pandas as pd
 
-# File paths
-detections_yml_path = "detections.yml"  # Path to the detections YAML file
-stories_yml_path = "stories.yml"        # Path to the stories YAML file
-mitre_csv_path = "mitre_data.csv"       # Path to the MITRE mapping CSV
-output_file = "mapped_stories.xlsx"     # Output Excel file path
+# Define folders and output paths
+detections_folder = r"path_to_your_detections_folder"
+stories_folder = r"path_to_your_stories_folder"
+mitre_csv_path = r"path_to_your_mitre_csv"
+output_csv_path = r"path_to_your_output_csv"
 
-# Load Detections YAML
-with open(detections_yml_path, 'r') as f:
-    detections_data = yaml.safe_load(f)
+# Function to load all YAML files from a folder
+def load_yml_files_from_folder(folder_path):
+    data = []
+    for file_name in os.listdir(folder_path):
+        if file_name.endswith((".yml", ".yaml")):
+            file_path = os.path.join(folder_path, file_name)
+            try:
+                with open(file_path, "r") as file:
+                    data.append(yaml.safe_load(file))
+            except Exception as e:
+                print(f"Error loading {file_name}: {e}")
+    return data
 
-# Convert Detections YAML to DataFrame
+# Load detection and story YAML files
+detections = load_yml_files_from_folder(detections_folder)
+stories = load_yml_files_from_folder(stories_folder)
+
+# Parse detections
 detections_list = []
-for detection in detections_data:
-    detections_list.append({
-        "Detection Name": detection.get("name", ""),
-        "Data Sources": "|".join(detection.get("data_source", [])),  # Combine data sources
-        "Tactics": "|".join(detection.get("tags", {}).get("tactic", [])),  # Combine tactics
-        "MITRE IDs": "|".join(detection.get("tags", {}).get("mitre_attack_id", []))  # Combine MITRE IDs
-    })
+for detection in detections:
+    if detection:
+        name = detection.get("name")
+        tags = detection.get("tags", {})
+        mitre_attack_id = tags.get("mitre_attack_id", "")
+        tactics = "|".join(tags.get("tactics", []))
+        data_sources = "|".join(detection.get("data_source", []))
+        detections_list.append({
+            "detection_name": name,
+            "tactics": tactics,
+            "data_sources": data_sources,
+            "mitre_attack_id": mitre_attack_id,
+        })
+
 detections_df = pd.DataFrame(detections_list)
 
-# Load Stories YAML
-with open(stories_yml_path, 'r') as f:
-    stories_data = yaml.safe_load(f)
-
-# Convert Stories YAML to DataFrame
+# Parse stories
 stories_list = []
-for story in stories_data:
-    stories_list.append({
-        "Story Name": story.get("name", ""),
-        "Detections": story.get("detections", []),  # List of detections
-        "Products": "|".join(story.get("products", [])),  # Combine products
-        "Date": story.get("date", "")
-    })
+for story in stories:
+    if story:
+        name = story.get("name")
+        description = story.get("description", "")
+        products = "|".join(story.get("products", []))
+        creation_date = story.get("creation_date", "")
+        detections_in_story = "|".join(story.get("detections", []))
+        stories_list.append({
+            "story_name": name,
+            "description": description,
+            "products": products,
+            "creation_date": creation_date,
+            "detections": detections_in_story,
+        })
+
 stories_df = pd.DataFrame(stories_list)
 
-# Load MITRE Data
+# Load MITRE data from CSV
 mitre_df = pd.read_csv(mitre_csv_path)
 
-# Create a mapping of MITRE IDs to tactics from the CSV
-mitre_mapping = {}
-for _, row in mitre_df.iterrows():
-    mitre_mapping[row["mitre_attack_id"]] = {
-        "tactic": row["tactic"],
-        "technique": row["technique"]
-    }
+# Merge stories with detections
+merged_df = stories_df.merge(
+    detections_df,
+    how="left",
+    left_on="detections",
+    right_on="detection_name"
+)
 
-# Map Stories to Detections and Enrich with MITRE Data
-mapped_data = []
-for _, story in stories_df.iterrows():
-    story_name = story["Story Name"]
-    products = story["Products"]
-    date = story["Date"]
-    for detection_name in story["Detections"]:
-        matched_detection = detections_df[detections_df["Detection Name"] == detection_name]
-        if not matched_detection.empty:
-            for _, detection_row in matched_detection.iterrows():
-                # Enrich with MITRE tactics
-                mitre_details = []
-                for mitre_id in detection_row["MITRE IDs"].split('|'):
-                    if mitre_id in mitre_mapping:
-                        mitre_details.append(mitre_mapping[mitre_id]["tactic"])
+# Merge with MITRE data
+merged_df = merged_df.merge(
+    mitre_df,
+    how="left",
+    left_on="mitre_attack_id",
+    right_on="mitre_id"
+)
 
-                # Combine all details into the final row
-                mapped_data.append({
-                    "Story Name": story_name,
-                    "Data Sources": detection_row["Data Sources"],
-                    "Tactics": detection_row["Tactics"],
-                    "Products": products,
-                    "Date": date,
-                    "MITRE Tactics": "|".join(set(mitre_details))  # Unique tactics combined with pipe
-                })
+# Rename columns to match manager's requirements
+merged_df = merged_df.rename(columns={
+    "story_name": "Name (Story)",
+    "data_sources": "Data Sources",
+    "tactics": "Tactics",
+    "products": "Products",
+    "creation_date": "Date",
+})
 
-# Convert to DataFrame
-final_df = pd.DataFrame(mapped_data)
+# Final column selection
+final_columns = ["Name (Story)", "Data Sources", "Tactics", "Products", "Date", "mitre_attack_id"]
+merged_df = merged_df[final_columns]
 
-# Save to Excel
-final_df.to_excel(output_file, index=False)
-print(f"Data successfully saved to {output_file}")
+# Save to CSV
+merged_df.to_csv(output_csv_path, index=False)
+
+print(f"CSV successfully created at: {output_csv_path}")
