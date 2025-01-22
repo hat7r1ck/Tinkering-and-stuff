@@ -4,6 +4,9 @@ import pandas as pd
 from datetime import datetime
 
 def load_yml_files(folder_path, skip_deprecated=True):
+    """
+    Recursively load .yml/.yaml files. Skips 'deprecated' subfolders if skip_deprecated=True.
+    """
     all_data = []
     for root, dirs, files in os.walk(folder_path):
         if skip_deprecated and 'deprecated' in root.lower():
@@ -28,21 +31,52 @@ def safe_parse_date(date_string):
     except ValueError:
         return "Unknown Date"
 
-# --------------------- EDIT THESE PATHS ---------------------
+# --------------------------------------------------------------------
+# Adjust these paths to your environment
+# --------------------------------------------------------------------
 detections_folder = r"/path/to/detections"
 stories_folder    = r"/path/to/stories"
 mitre_csv_path    = r"/path/to/mitre_exploded.csv"
-output_csv_path   = r"/path/to/final_merged_exploded.csv"
-# -----------------------------------------------------------
+output_csv_path   = r"/path/to/final_output.csv"
 
-# 1) Load files
+# 1) Load data
 detections_yml = load_yml_files(detections_folder, skip_deprecated=True)
 stories_yml    = load_yml_files(stories_folder, skip_deprecated=False)
 mitre_df       = pd.read_csv(mitre_csv_path)
 
-# 2) Process detections (explode multiple MITRE IDs)
+# 2) Process stories into a DataFrame
+story_rows = []
+for s in stories_yml:
+    s_name  = s.get("name", "Unknown Story")
+    s_id    = s.get("id", "")
+    s_ver   = s.get("version", "")
+    s_date  = safe_parse_date(s.get("date"))
+    s_auth  = s.get("author", "")
+    s_desc  = s.get("description", "")
+    s_narr  = s.get("narrative", "")
+
+    p_list = s.get("products", [])
+    if not isinstance(p_list, list):
+        p_list = [p_list]
+    story_products = "|".join(p_list)
+
+    story_rows.append({
+        "story_name": s_name,
+        "story_id": s_id,
+        "story_version": s_ver,
+        "story_date": s_date,
+        "story_author": s_auth,
+        "story_description": s_desc,
+        "story_narrative": s_narr,
+        "story_products": story_products
+    })
+
+stories_df = pd.DataFrame(story_rows)
+
+# 3) Process detections, parse analytic_story
 detection_rows = []
 for det in detections_yml:
+    # skip if deprecated
     if det.get("status", "").lower() == "deprecated":
         continue
 
@@ -64,42 +98,33 @@ for det in detections_yml:
     data_sources_joined = "|".join(data_source_list)
 
     tags = det.get("tags", {})
+
+    # Tactics
     tacts = tags.get("tactics", [])
     if not isinstance(tacts, list):
         tacts = [tacts]
     tacts_joined = "|".join(tacts)
 
-    # Detection-level products
-    det_prod_list = tags.get("product", [])
-    if not isinstance(det_prod_list, list):
-        det_prod_list = [det_prod_list]
-    detection_products_joined = "|".join(det_prod_list)
+    # detection-level product
+    prod_list = tags.get("product", [])
+    if not isinstance(prod_list, list):
+        prod_list = [prod_list]
+    detection_products = "|".join(prod_list)
 
-    # Possibly multiple MITRE IDs
+    # MITRE
     m_ids = tags.get("mitre_attack_id", [])
     if not isinstance(m_ids, list):
         m_ids = [m_ids] if m_ids else []
 
-    if not m_ids:
-        detection_rows.append({
-            "detection_name": d_name,
-            "detection_id": d_id,
-            "detection_version": d_ver,
-            "detection_date": d_date,
-            "detection_author": d_author,
-            "detection_status": d_stat,
-            "detection_type": d_type,
-            "detection_description": d_desc,
-            "detection_search": d_search,
-            "detection_how_to_implement": d_impl,
-            "detection_known_false_positives": d_fp,
-            "data_sources": data_sources_joined,
-            "tactics": tacts_joined,
-            "detection_products": detection_products_joined,
-            "mitre_id": None
-        })
-    else:
-        for mid in m_ids:
+    # THIS is the key: "analytic_story" from detection
+    analytic_stories = tags.get("analytic_story", [])
+    if not isinstance(analytic_stories, list):
+        analytic_stories = [analytic_stories] if analytic_stories else []
+
+    # If no analytic_story, still produce a row (maybe no story link)
+    if len(analytic_stories) == 0:
+        # Even if multiple MITRE IDs, we explode on them
+        if not m_ids:
             detection_rows.append({
                 "detection_name": d_name,
                 "detection_id": d_id,
@@ -114,105 +139,106 @@ for det in detections_yml:
                 "detection_known_false_positives": d_fp,
                 "data_sources": data_sources_joined,
                 "tactics": tacts_joined,
-                "detection_products": detection_products_joined,
-                "mitre_id": mid
+                "detection_products": detection_products,
+                "mitre_id": None,
+                "analytic_story_ref": None
             })
+        else:
+            for mid in m_ids:
+                detection_rows.append({
+                    "detection_name": d_name,
+                    "detection_id": d_id,
+                    "detection_version": d_ver,
+                    "detection_date": d_date,
+                    "detection_author": d_author,
+                    "detection_status": d_stat,
+                    "detection_type": d_type,
+                    "detection_description": d_desc,
+                    "detection_search": d_search,
+                    "detection_how_to_implement": d_impl,
+                    "detection_known_false_positives": d_fp,
+                    "data_sources": data_sources_joined,
+                    "tactics": tacts_joined,
+                    "detection_products": detection_products,
+                    "mitre_id": mid,
+                    "analytic_story_ref": None
+                })
+    else:
+        # We have one or more story references
+        for story_ref in analytic_stories:
+            if not m_ids:
+                # No mitre_id
+                detection_rows.append({
+                    "detection_name": d_name,
+                    "detection_id": d_id,
+                    "detection_version": d_ver,
+                    "detection_date": d_date,
+                    "detection_author": d_author,
+                    "detection_status": d_stat,
+                    "detection_type": d_type,
+                    "detection_description": d_desc,
+                    "detection_search": d_search,
+                    "detection_how_to_implement": d_impl,
+                    "detection_known_false_positives": d_fp,
+                    "data_sources": data_sources_joined,
+                    "tactics": tacts_joined,
+                    "detection_products": detection_products,
+                    "mitre_id": None,
+                    "analytic_story_ref": story_ref
+                })
+            else:
+                # Explode on MITRE ID + story
+                for mid in m_ids:
+                    detection_rows.append({
+                        "detection_name": d_name,
+                        "detection_id": d_id,
+                        "detection_version": d_ver,
+                        "detection_date": d_date,
+                        "detection_author": d_author,
+                        "detection_status": d_stat,
+                        "detection_type": d_type,
+                        "detection_description": d_desc,
+                        "detection_search": d_search,
+                        "detection_how_to_implement": d_impl,
+                        "detection_known_false_positives": d_fp,
+                        "data_sources": data_sources_joined,
+                        "tactics": tacts_joined,
+                        "detection_products": detection_products,
+                        "mitre_id": mid,
+                        "analytic_story_ref": story_ref
+                    })
 
 detections_df = pd.DataFrame(detection_rows)
 
-# 3) Process stories
-story_rows = []
-for s in stories_yml:
-    s_name = s.get("name", "Unknown Story")
-    s_id   = s.get("id", "")
-    s_ver  = s.get("version", "")
-    s_date = safe_parse_date(s.get("date"))
-    s_auth = s.get("author", "")
-    s_desc = s.get("description", "")
-    s_narr = s.get("narrative", "")
+# 4) Merge on "analytic_story_ref" == "story_name"
+#    (Careful with case/spaces if they might differ)
+story_det_df = pd.merge(
+    detections_df,
+    stories_df,
+    how="left",   # keep all detections even if story not found
+    left_on="analytic_story_ref",
+    right_on="story_name"
+)
 
-    # Story-level products
-    story_prod_list = s.get("products", [])
-    if not isinstance(story_prod_list, list):
-        story_prod_list = [story_prod_list]
-    story_products_joined = "|".join(story_prod_list)
+# 5) Merge with MITRE CSV on "mitre_id"
+final_df = pd.merge(
+    story_det_df,
+    mitre_df,
+    how="left",
+    on="mitre_id"
+)
 
-    det_list = s.get("detections", [])
-    if not isinstance(det_list, list):
-        det_list = [det_list]
-
-    if not det_list:
-        # No detections -> produce a single row
-        story_rows.append({
-            "story_name": s_name,
-            "story_id": s_id,
-            "story_version": s_ver,
-            "story_date": s_date,
-            "story_author": s_auth,
-            "story_description": s_desc,
-            "story_narrative": s_narr,
-            "products": story_products_joined,
-            "detection_name": None
-        })
-    else:
-        for d_n in det_list:
-            story_rows.append({
-                "story_name": s_name,
-                "story_id": s_id,
-                "story_version": s_ver,
-                "story_date": s_date,
-                "story_author": s_auth,
-                "story_description": s_desc,
-                "story_narrative": s_narr,
-                "products": story_products_joined,
-                "detection_name": d_n
-            })
-
-stories_df = pd.DataFrame(story_rows)
-
-# 4) Merge stories + detections on detection_name
-story_det_df = pd.merge(stories_df, detections_df, how="left", on="detection_name")
-
-# 5) Merge with exploded MITRE CSV
-merged_df = pd.merge(story_det_df, mitre_df, how="left", on="mitre_id")
-
-# 6) Combine + Explode Products Without Duplicates
-#    We'll gather story products + detection products, merge them into a set,
-#    then explode so each row has exactly one product.
-
-def combine_and_explode_products(row):
-    s_products = row["products"].split("|") if pd.notnull(row["products"]) else []
-    d_products = row["detection_products"].split("|") if pd.notnull(row["detection_products"]) else []
-    # Merge them in a set to remove duplicates
-    combined = set(s_products + d_products) - {""}  # remove empty
-    return list(combined)  # Convert back to list for explode
-
-merged_df["combined_products"] = merged_df.apply(combine_and_explode_products, axis=1)
-
-# Explode => one row per product
-final_df = merged_df.explode("combined_products", ignore_index=True)
-
-# Rename
-final_df.rename(columns={"combined_products": "product"}, inplace=True)
-
-# 7) Reorder columns, removing old pipe-delimited product columns if desired
+# 6) Reorder columns
 columns_order = [
-    "story_name","story_id","story_version","story_date","story_author",
-    "story_description","story_narrative",
-    # If you want to keep them:
-    "products",          # story-level pipe-delimited
-    "detection_products",# detection-level pipe-delimited
-    "product",           # final exploded product (deduped)
-    "detection_name","detection_id","detection_version","detection_date",
-    "detection_author","detection_status","detection_type","data_sources",
-    "tactics","detection_description","detection_search","detection_how_to_implement",
-    "detection_known_false_positives",
+    "analytic_story_ref",  # from detection
+    "story_name","story_id","story_version","story_date","story_author","story_description","story_narrative","story_products",
+    "detection_name","detection_id","detection_version","detection_date","detection_author","detection_status","detection_type",
+    "detection_description","detection_search","detection_how_to_implement","detection_known_false_positives",
+    "data_sources","tactics","detection_products",
     "mitre_id","technique","mitre_tactic","mitre_group"
 ]
-
 existing_cols = [c for c in columns_order if c in final_df.columns]
 final_df = final_df[existing_cols]
 
-# 8) Save
 final_df.to_csv(output_csv_path, index=False, encoding='utf-8')
-print(f"Final exploded CSV saved: {output_csv_path}")
+print(f"Done. CSV saved to {output_csv_path}")
