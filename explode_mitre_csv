@@ -1,0 +1,29 @@
+import pandas as pd
+
+# Update these paths as needed:
+input_csv  = r"/path/to/mitre_input.csv"     # Original multi-value CSV
+output_csv = r"/path/to/mitre_exploded.csv"  # Exploded CSV
+
+# Load data
+df = pd.read_csv(input_csv)
+
+# Replace "no" or NaN with empty string so we can split cleanly
+df['tactics'] = df['tactics'].fillna('').replace('no', '')
+df['groups']  = df['groups'].fillna('').replace('no', '')
+
+# Split on '|'; if empty, store [None] so we keep that row but with null
+df['tactics'] = df['tactics'].apply(lambda x: x.split('|') if x else [None])
+df['groups']  = df['groups'].apply(lambda x: x.split('|') if x else [None])
+
+# Explode so each tactic is its own row, then each group is its own row
+df = df.explode('tactics').explode('groups')
+
+# Rename columns for clarity (optional)
+df = df.rename(columns={
+    'tactics': 'mitre_tactic',
+    'groups':  'mitre_group'
+})
+
+# Save
+df.to_csv(output_csv, index=False, encoding='utf-8')
+print(f"Exploded MITRE CSV created: {output_csv}")
