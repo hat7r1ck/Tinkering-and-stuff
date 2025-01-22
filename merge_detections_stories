@@ -4,10 +4,6 @@ import pandas as pd
 from datetime import datetime
 
 def load_yml_files(folder_path, skip_deprecated=True):
-    """
-    Recursively loads .yml/.yaml files from folder_path.
-    Skips subfolders with 'deprecated' if skip_deprecated=True.
-    """
     all_data = []
     for root, dirs, files in os.walk(folder_path):
         if skip_deprecated and 'deprecated' in root.lower():
@@ -25,7 +21,6 @@ def load_yml_files(folder_path, skip_deprecated=True):
     return all_data
 
 def safe_parse_date(date_string):
-    """Parse date as YYYY-MM-DD, else return 'Unknown Date'."""
     if not date_string:
         return "Unknown Date"
     try:
@@ -33,21 +28,21 @@ def safe_parse_date(date_string):
     except ValueError:
         return "Unknown Date"
 
-# Update these paths as needed:
+# --------------------- EDIT THESE PATHS ---------------------
 detections_folder = r"/path/to/detections"
 stories_folder    = r"/path/to/stories"
-mitre_csv_path    = r"/path/to/mitre_exploded.csv"  # Note: use exploded CSV here
-output_csv_path   = r"/path/to/final_merged_output.csv"
+mitre_csv_path    = r"/path/to/mitre_exploded.csv"
+output_csv_path   = r"/path/to/final_merged_exploded.csv"
+# -----------------------------------------------------------
 
-# 1) Load YAML files + MITRE CSV
+# 1) Load files
 detections_yml = load_yml_files(detections_folder, skip_deprecated=True)
 stories_yml    = load_yml_files(stories_folder, skip_deprecated=False)
 mitre_df       = pd.read_csv(mitre_csv_path)
 
-# 2) Process Detections
+# 2) Process detections (explode multiple MITRE IDs)
 detection_rows = []
 for det in detections_yml:
-    # Optionally skip detection if status=='deprecated'
     if det.get("status", "").lower() == "deprecated":
         continue
 
@@ -63,22 +58,24 @@ for det in detections_yml:
     d_impl   = det.get("how_to_implement", "")
     d_fp     = det.get("known_false_positives", "")
 
-    ds_list  = det.get("data_source", [])
-    if not isinstance(ds_list, list):
-        ds_list = [ds_list]
-    ds_joined = "|".join(ds_list)
+    data_source_list = det.get("data_source", [])
+    if not isinstance(data_source_list, list):
+        data_source_list = [data_source_list]
+    data_sources_joined = "|".join(data_source_list)
 
-    tags  = det.get("tags", {})
-    # If your detections have "tactics" or "mitre_attack_tactics"
-    # adjust as necessary. This example uses "tactics".
+    tags = det.get("tags", {})
     tacts = tags.get("tactics", [])
     if not isinstance(tacts, list):
         tacts = [tacts]
     tacts_joined = "|".join(tacts)
 
-    # If detection references multiple MITRE IDs, we store them in "mitre_id".
-    # But now that your MITRE CSV is exploded, each ID in that CSV is just 1 row.
-    # We'll still create multiple rows if your YAML has multiple mitre_attack_ids.
+    # Detection-level products
+    det_prod_list = tags.get("product", [])
+    if not isinstance(det_prod_list, list):
+        det_prod_list = [det_prod_list]
+    detection_products_joined = "|".join(det_prod_list)
+
+    # Possibly multiple MITRE IDs
     m_ids = tags.get("mitre_attack_id", [])
     if not isinstance(m_ids, list):
         m_ids = [m_ids] if m_ids else []
@@ -96,8 +93,9 @@ for det in detections_yml:
             "detection_search": d_search,
             "detection_how_to_implement": d_impl,
             "detection_known_false_positives": d_fp,
-            "data_sources": ds_joined,
+            "data_sources": data_sources_joined,
             "tactics": tacts_joined,
+            "detection_products": detection_products_joined,
             "mitre_id": None
         })
     else:
@@ -114,48 +112,59 @@ for det in detections_yml:
                 "detection_search": d_search,
                 "detection_how_to_implement": d_impl,
                 "detection_known_false_positives": d_fp,
-                "data_sources": ds_joined,
+                "data_sources": data_sources_joined,
                 "tactics": tacts_joined,
+                "detection_products": detection_products_joined,
                 "mitre_id": mid
             })
 
 detections_df = pd.DataFrame(detection_rows)
 
-# 3) Process Stories
+# 3) Process stories
 story_rows = []
 for s in stories_yml:
-    s_name  = s.get("name", "Unknown Story")
-    s_id    = s.get("id", "")
-    s_ver   = s.get("version", "")
-    s_date  = safe_parse_date(s.get("date"))
-    s_auth  = s.get("author", "")
-    s_desc  = s.get("description", "")
-    s_narr  = s.get("narrative", "")
+    s_name = s.get("name", "Unknown Story")
+    s_id   = s.get("id", "")
+    s_ver  = s.get("version", "")
+    s_date = safe_parse_date(s.get("date"))
+    s_auth = s.get("author", "")
+    s_desc = s.get("description", "")
+    s_narr = s.get("narrative", "")
 
-    p_list = s.get("products", [])
-    if not isinstance(p_list, list):
-        p_list = [p_list]
-    products_joined = "|".join(p_list)
+    # Story-level products
+    story_prod_list = s.get("products", [])
+    if not isinstance(story_prod_list, list):
+        story_prod_list = [story_prod_list]
+    story_products_joined = "|".join(story_prod_list)
 
-    d_list = s.get("detections", [])
-    if not isinstance(d_list, list):
-        d_list = [d_list]
+    det_list = s.get("detections", [])
+    if not isinstance(det_list, list):
+        det_list = [det_list]
 
-    if not d_list:
+    if not det_list:
+        # No detections -> produce a single row
         story_rows.append({
-            "story_name": s_name, "story_id": s_id,
-            "story_version": s_ver, "story_date": s_date,
-            "story_author": s_auth, "story_description": s_desc,
-            "story_narrative": s_narr, "products": products_joined,
+            "story_name": s_name,
+            "story_id": s_id,
+            "story_version": s_ver,
+            "story_date": s_date,
+            "story_author": s_auth,
+            "story_description": s_desc,
+            "story_narrative": s_narr,
+            "products": story_products_joined,
             "detection_name": None
         })
     else:
-        for d_n in d_list:
+        for d_n in det_list:
             story_rows.append({
-                "story_name": s_name, "story_id": s_id,
-                "story_version": s_ver, "story_date": s_date,
-                "story_author": s_auth, "story_description": s_desc,
-                "story_narrative": s_narr, "products": products_joined,
+                "story_name": s_name,
+                "story_id": s_id,
+                "story_version": s_ver,
+                "story_date": s_date,
+                "story_author": s_auth,
+                "story_description": s_desc,
+                "story_narrative": s_narr,
+                "products": story_products_joined,
                 "detection_name": d_n
             })
 
@@ -164,22 +173,46 @@ stories_df = pd.DataFrame(story_rows)
 # 4) Merge stories + detections on detection_name
 story_det_df = pd.merge(stories_df, detections_df, how="left", on="detection_name")
 
-# 5) Merge with exploded MITRE CSV on "mitre_id"
-final_df = pd.merge(story_det_df, mitre_df, how="left", on="mitre_id")
+# 5) Merge with exploded MITRE CSV
+merged_df = pd.merge(story_det_df, mitre_df, how="left", on="mitre_id")
 
-# 6) Reorder columns as desired
+# 6) Combine + Explode Products Without Duplicates
+#    We'll gather story products + detection products, merge them into a set,
+#    then explode so each row has exactly one product.
+
+def combine_and_explode_products(row):
+    s_products = row["products"].split("|") if pd.notnull(row["products"]) else []
+    d_products = row["detection_products"].split("|") if pd.notnull(row["detection_products"]) else []
+    # Merge them in a set to remove duplicates
+    combined = set(s_products + d_products) - {""}  # remove empty
+    return list(combined)  # Convert back to list for explode
+
+merged_df["combined_products"] = merged_df.apply(combine_and_explode_products, axis=1)
+
+# Explode => one row per product
+final_df = merged_df.explode("combined_products", ignore_index=True)
+
+# Rename
+final_df.rename(columns={"combined_products": "product"}, inplace=True)
+
+# 7) Reorder columns, removing old pipe-delimited product columns if desired
 columns_order = [
     "story_name","story_id","story_version","story_date","story_author",
-    "products","story_description","story_narrative",
+    "story_description","story_narrative",
+    # If you want to keep them:
+    "products",          # story-level pipe-delimited
+    "detection_products",# detection-level pipe-delimited
+    "product",           # final exploded product (deduped)
     "detection_name","detection_id","detection_version","detection_date",
-    "detection_author","detection_status","detection_type","data_sources","tactics",
-    "detection_description","detection_search","detection_how_to_implement",
+    "detection_author","detection_status","detection_type","data_sources",
+    "tactics","detection_description","detection_search","detection_how_to_implement",
     "detection_known_false_positives",
     "mitre_id","technique","mitre_tactic","mitre_group"
 ]
+
 existing_cols = [c for c in columns_order if c in final_df.columns]
 final_df = final_df[existing_cols]
 
-# 7) Save final CSV
+# 8) Save
 final_df.to_csv(output_csv_path, index=False, encoding='utf-8')
-print(f"Final merged CSV: {output_csv_path}")
+print(f"Final exploded CSV saved: {output_csv_path}")
